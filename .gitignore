@@ -1,0 +1,9 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Model checkpoints
+ai/checkpoints/lane_detection/*.pth
+
+# Generated outputs
+ai/outputs/
