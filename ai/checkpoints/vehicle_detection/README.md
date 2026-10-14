@@ -61,4 +61,3 @@ Results below are measured on the **195-image test split** using each model’s 
 | yolo11n | 87.56 | 78.0 | 83.45 | 58.46 |
 | yolo26n | 88.23 | 76.98 | 84.35 | 58.72 |
 
-Validation settings: `conf=0.001`, `iou=0.7`, and `imgsz=640`. These are validation results, not test results.
