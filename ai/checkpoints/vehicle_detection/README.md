@@ -27,7 +27,6 @@ Dataset: **1,950 images**
 - Validation: 390 images
 - Test: 195 images
 
-Results below are measured on the **195-image test split** using each model’s best checkpoint.
 | Model | Precision (%) | Recall (%) | mAP@50 (%) | mAP@50–95 (%) |
 | --- | --- | --- | --- | --- |
 | yolov8n | 89.88 | 74.62 | 81.22 | 57.14 |
@@ -53,11 +52,21 @@ Dataset: **1,950 images**
 - Training: 4,567 images
 - Validation: 1,305 images
 - Test: 653 images
-
-Results below are measured on the **195-image test split** using each model’s best checkpoint.
+## conf 0.1 iof 0.7
 | Model | Precision (%) | Recall (%) | mAP@50 (%) | mAP@50–95 (%) |
 | --- | --- | --- | --- | --- |
 | yolov8n | **88.57** | **78.32** | **84.53** | **58.93** |
 | yolo11n | 87.56 | 78.0 | 83.45 | 58.46 |
 | yolo26n | 88.23 | 76.98 | 84.35 | 58.72 |
-
+## conf 0.3 iof 0.7
+| Model | Precision (%) | Recall (%) | mAP@50 (%) | mAP@50–95 (%) |
+| --- | --- | --- | --- | --- |
+| yolov8n | 88.57 | 78.32 | 78.44 | 55.98 |
+| yolo11n | 87.56 | 78.0 | 78.54 | 55.98 |
+| yolo26n | 88.23 | 76.98 | 77.86 | 55.62 |
+# conf 0.5 iof 0.7
+| Model | Precision (%) | Recall (%) | mAP@50 (%) | mAP@50–95 (%) |
+| --- | --- | --- | --- | --- |
+| yolov8n | 91.77 | 73.01 | 71.53 | 52.26 |
+| yolo11n | 90.68 | 71.8 | 70.21 | 51.45 |
+| yolo26n | 92.36 | 71.85 | 70.95 | 51.94 |
