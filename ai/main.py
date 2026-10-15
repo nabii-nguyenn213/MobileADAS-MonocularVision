@@ -28,6 +28,9 @@ def main():
     parser.add_argument("--max-frames", type=int, default=None)
     parser.add_argument("--progress-every", type=int, default=30)
     parser.add_argument("--display", action="store_true")
+    parser.add_argument("--smooth-alpha", type=float, default=0.25)
+    parser.add_argument("--max-jump-ratio", type=float, default=0.04)
+    parser.add_argument("--hold-frames", type=int, default=2)
     args = parser.parse_args()
 
     if not args.video.is_file():
@@ -54,6 +57,10 @@ def main():
         point_radius=args.point_radius,
         lane_margin=args.margin,
         crop_16_9=not args.no_crop,
+        # Temporal stabilization
+        smooth_alpha=args.smooth_alpha,
+        max_jump_ratio=args.max_jump_ratio,
+        hold_frames=args.hold_frames,
     )
     fusion.reset()
 
