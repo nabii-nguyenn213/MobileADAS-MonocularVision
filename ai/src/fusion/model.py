@@ -1,10 +1,12 @@
 import inspect
+import math
 from pathlib import Path
 
 import numpy as np
 
 from ai.src.lane_detection.tests.test_hybrid_lane import HybridLaneTest
 from ai.src.vehicle_detection.model import VehicleModel
+from ai.src.distance_estimation import DistanceEstimator
 from ai.src.fusion.lane_smoother import LaneSmoother
 from ai.src.fusion.lane_vehicle import draw_lane_vehicles
 
@@ -34,7 +36,25 @@ class LaneVehicleFusion:
         smooth_alpha=0.25,
         max_jump_ratio=0.04,
         hold_frames=2,
+        distance_enabled=True,
+        horizontal_fov_deg=None,
+        focal_length_px=None,
+        distance_threshold_m=50.0,
+        vehicle_widths=None,
+        show_distance=True,
+        distance_reference_resolution=None,
     ):
+        if not math.isfinite(distance_threshold_m) or distance_threshold_m <= 0:
+            raise ValueError("distance_threshold_m must be finite and positive")
+        self.distance_enabled = distance_enabled
+        self.show_distance = show_distance
+        self.distance_threshold_m = distance_threshold_m
+        self.distance_estimator = DistanceEstimator(
+            focal_length_px=focal_length_px,
+            horizontal_fov_deg=horizontal_fov_deg,
+            reference_resolution=distance_reference_resolution,
+            vehicle_widths=vehicle_widths,
+        )
         # HybridLaneTest already builds both ResNet34-based lane detectors,
         # loads checkpoints and controls confidence/hysteresis selection.
         self.lane = HybridLaneTest(
@@ -105,6 +125,23 @@ class LaneVehicleFusion:
         # Reuse existing YOLO model; no new vehicle model logic.
         detections = self.vehicle.predict(work_frame)
 
+        # The hybrid crops without resizing; preserve the original camera fx.
+        height, width = frame.shape[:2]
+        wh, ww = work_frame.shape[:2]
+        offset_x = (width - ww) // 2
+        offset_y = height - wh
+        crop_box = (offset_x, offset_y, offset_x + ww, offset_y + wh)
+        distances = [
+            {
+                "detection_index": index,
+                "distance_m": self.distance_estimator.estimate(
+                    detection["bbox"], (ww, wh), detection["class_name"],
+                    source_resolution=(width, height), crop_box=crop_box,
+                ) if self.distance_enabled else None,
+            }
+            for index, detection in enumerate(detections)
+        ]
+
         # Reuse the hybrid's original point-only lane visualization.
         lane_frame = self.lane._visualize(work_frame, lane_result)
 
@@ -116,6 +153,9 @@ class LaneVehicleFusion:
             right_lane,
             margin=self.lane_margin,
             show_lane_points=False,
+            distance_estimates=distances,
+            show_distance=self.show_distance and self.distance_enabled,
+            distance_threshold_m=self.distance_threshold_m,
         )
 
         result = {
@@ -124,6 +164,7 @@ class LaneVehicleFusion:
             "curvelanes_score": lane_result["curvelanes_score"],
             "ego_lane": ego_lane,
             "vehicles": detections,
+            "vehicle_distances": distances,
             "in_lane_vehicles": in_lane,
             "lead_vehicle": lead,
         }

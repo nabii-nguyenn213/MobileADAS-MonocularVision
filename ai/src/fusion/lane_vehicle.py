@@ -119,6 +119,9 @@ def draw_lane_vehicles(
     right_lane,
     margin=0,
     show_lane_points=True,
+    distance_estimates=None,
+    show_distance=False,
+    distance_threshold_m=50.0,
 ):
     """Draw colored boxes and return (annotated_frame, in_lane, lead).
 
@@ -127,6 +130,8 @@ def draw_lane_vehicles(
     Gray: other-lane vehicles
     Yellow: unknown lane membership
 
+    With show_distance=True, distance colors override lane colors: red below
+    threshold, green at/above, gray unavailable. These are demo estimates.
     Set show_lane_points=False if HybridLaneTest._visualize() already drew them.
     """
     if show_lane_points:
@@ -165,6 +170,16 @@ def draw_lane_vehicles(
         class_name = detection.get("class_name", "vehicle")
         confidence = float(detection.get("confidence", 0.0))
         label = f"{label_status} | {class_name} {confidence:.2f}"
+
+        if show_distance:
+            distance = (distance_estimates[index]["distance_m"]
+                        if distance_estimates is not None else None)
+            if distance is not None and np.isfinite(distance) and distance > 0:
+                color = ((0, 255, 0) if distance >= distance_threshold_m
+                         else (0, 0, 255))
+                label += f" | {distance:.1f} m"
+            else:
+                color = (150, 150, 150)
 
         cv2.rectangle(output, (x1, y1), (x2, y2), color, 2)
         cv2.putText(

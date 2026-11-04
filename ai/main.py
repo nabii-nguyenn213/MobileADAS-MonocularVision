@@ -31,6 +31,16 @@ def main():
     parser.add_argument("--smooth-alpha", type=float, default=0.25)
     parser.add_argument("--max-jump-ratio", type=float, default=0.04)
     parser.add_argument("--hold-frames", type=int, default=2)
+    camera = parser.add_mutually_exclusive_group()
+    camera.add_argument("--horizontal-fov-deg", type=float)
+    camera.add_argument("--focal-length-px", type=float)
+    parser.add_argument("--distance-reference-resolution", nargs=2, type=int,
+                        metavar=("WIDTH", "HEIGHT"))
+    parser.add_argument("--distance-threshold-m", type=float, default=50.0)
+    parser.add_argument("--vehicle-widths", type=Path,
+                        help="JSON mapping class names to approximate widths in meters")
+    parser.add_argument("--no-distance", action="store_true")
+    parser.add_argument("--hide-distance", action="store_true")
     args = parser.parse_args()
 
     if not args.video.is_file():
@@ -46,7 +56,42 @@ def main():
     if args.max_frames is not None and args.max_frames < 1:
         parser.error("--max-frames must be > 0")
 
+    # Fail before model construction, with readable missing-file errors.
+    from ai.src.lane_detection.tests.test_hybrid_lane import HybridLaneTest
+    for checkpoint in [args.vehicle_weights or LaneVehicleFusion.DEFAULT_WEIGHTS,
+                       HybridLaneTest.TUSIMPLE["checkpoint"],
+                       HybridLaneTest.CURVELANES["checkpoint"]]:
+        if not Path(checkpoint).is_file():
+            parser.error(f"Model weights not found: {checkpoint}")
+    vehicle_widths = None
+    if args.vehicle_widths:
+        import json
+        try:
+            vehicle_widths = json.loads(args.vehicle_widths.read_text())
+        except (OSError, ValueError) as exc:
+            parser.error(f"Cannot read vehicle widths: {exc}")
+    if not args.no_distance and args.focal_length_px is None and args.horizontal_fov_deg is None:
+        print("Camera parameters unavailable: distance estimates will be None.")
+
+    from ai.src.distance_estimation import DistanceEstimator
+    try:
+        DistanceEstimator(focal_length_px=args.focal_length_px,
+                          horizontal_fov_deg=args.horizontal_fov_deg,
+                          reference_resolution=args.distance_reference_resolution,
+                          vehicle_widths=vehicle_widths)
+        if not np.isfinite(args.distance_threshold_m) or args.distance_threshold_m <= 0:
+            raise ValueError("--distance-threshold-m must be finite and positive")
+    except (TypeError, ValueError, AttributeError) as exc:
+        parser.error(f"Invalid distance configuration: {exc}")
+
     fusion = LaneVehicleFusion(
+        distance_enabled=not args.no_distance,
+        horizontal_fov_deg=args.horizontal_fov_deg,
+        focal_length_px=args.focal_length_px,
+        distance_reference_resolution=args.distance_reference_resolution,
+        distance_threshold_m=args.distance_threshold_m,
+        vehicle_widths=vehicle_widths,
+        show_distance=not args.hide_distance,
         vehicle_weights=args.vehicle_weights,
         vehicle_conf=args.conf,
         img_size=args.img_size,
@@ -103,6 +148,7 @@ def main():
                     f"Frame {frames} | model={result['selected_lane_model']} "
                     f"| vehicles={len(result['vehicles'])} "
                     f"| in_lane={len(result['in_lane_vehicles'])} "
+                    f"| distances={sum(d['distance_m'] is not None for d in result['vehicle_distances'])} "
                     f"| fps={frames / max(elapsed, 1e-6):.1f}"
                 )
 

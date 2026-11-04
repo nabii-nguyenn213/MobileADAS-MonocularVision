@@ -11,7 +11,7 @@ CLASS_NAMES = {
 
 class VehicleModel: 
     def __init__(self, model_path=None, img_size=640, confidence_threshold=0.25): 
-        self.model_path = "ai/checkpoints/vehicle_detection/26n_best.pt" if model_path is None else model_path
+        self.model_path = "ai/checkpoints/vehicle_detection/26n_best_2.pt" if model_path is None else model_path
         self.img_size = img_size
         self.confidence_threshold = confidence_threshold
 
