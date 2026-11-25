@@ -41,6 +41,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import android.media.AudioManager;
+import android.media.ToneGenerator;
+
 public class CameraActivity extends Activity
         implements CameraBridgeViewBase.CvCameraViewListener2 {
 
@@ -91,6 +94,8 @@ public class CameraActivity extends Activity
 
     private volatile float speedKmh = Float.NaN;
     private volatile long lastSpeedElapsedMs = 0L;
+    private ToneGenerator followingTone;
+    private long lastFollowingBeepMs = -1L;
 
     private long previousFrameTime;
     private long lastLogTime;
@@ -189,6 +194,46 @@ public class CameraActivity extends Activity
                     }
                 }
             };
+    private synchronized void updateFollowingBeep(
+            objectDetectorClass.NearestVehicle nearest) {
+        if (followingTone == null) return;
+
+        long now = SystemClock.elapsedRealtime();
+        long speedTime = lastSpeedElapsedMs;
+        float speed = speedKmh;
+
+        if (nearest == null || speedTime <= 0
+                || now < speedTime || now - speedTime > SPEED_STALE_MS
+                || Float.isNaN(speed) || Float.isInfinite(speed) || speed <= 0f
+                || !(nearest.distanceMeters > 0f)
+                || Float.isInfinite(nearest.distanceMeters)) {
+            lastFollowingBeepMs = -1L;
+            return;
+        }
+
+        float headway = nearest.distanceMeters / (speed / 3.6f);
+        if (headway > 1.2f) {
+            lastFollowingBeepMs = -1L;
+            return;
+        }
+
+// Nhịp tăng dần từ 500 ms ở 1,2 giây đến 250 ms ở 0,8 giây.
+        float progress = Math.max(0f, (headway - 0.8f) / (1.2f - 0.8f));
+        long intervalMs = Math.round(200f + 300f * progress);
+
+        if (lastFollowingBeepMs < 0 || now - lastFollowingBeepMs >= intervalMs) {
+            followingTone.startTone(ToneGenerator.TONE_PROP_BEEP, 100);
+            lastFollowingBeepMs = now;
+        }
+    }
+
+    private synchronized void releaseFollowingTone() {
+        if (followingTone != null) {
+            followingTone.release();
+            followingTone = null;
+        }
+        lastFollowingBeepMs = -1L;
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -369,6 +414,15 @@ public class CameraActivity extends Activity
     protected void onResume() {
 
         super.onResume();
+        synchronized (this) {
+            if (followingTone == null) {
+                try {
+                    followingTone = new ToneGenerator(AudioManager.STREAM_MUSIC, 70);
+                } catch (RuntimeException e) {
+                    Log.w(TAG, "Could not initialize following warning tone", e);
+                }
+            }
+        }
 
         if (orientationListener != null &&
                 orientationListener.canDetectOrientation()) {
@@ -443,6 +497,7 @@ public class CameraActivity extends Activity
 
     @Override
     protected void onPause() {
+        releaseFollowingTone();
 
         if (orientationListener != null)
             orientationListener.disable();
@@ -480,6 +535,11 @@ public class CameraActivity extends Activity
 
     @Override
     public void onCameraViewStarted(int width, int height) {
+        CameraProfile profile = CameraProfile.fromDevice(this);
+
+        if (vehicleDetector != null) {
+            vehicleDetector.setCameraProfile(profile);
+        }
 
         previousFrameTime = 0;
         fps = 0;
@@ -920,6 +980,10 @@ public class CameraActivity extends Activity
             long yoloStart = System.nanoTime();
 
             if (vehicleDetector != null) {
+                vehicleDetector.setCameraRotated90(
+                        rotationCode == Core.ROTATE_90_CLOCKWISE
+                                || rotationCode == Core.ROTATE_90_COUNTERCLOCKWISE
+                );
 
                 vehicleDetector.recognizeImage(modelFrame);
             }
@@ -936,6 +1000,7 @@ public class CameraActivity extends Activity
                     vehicleDetector == null
                             ? null
                             : vehicleDetector.getNearestVehicle();
+            updateFollowingBeep(nearest);
 
             drawTelemetry(
                     modelFrame,

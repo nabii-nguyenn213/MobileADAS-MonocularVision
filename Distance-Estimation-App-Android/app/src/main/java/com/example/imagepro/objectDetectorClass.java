@@ -35,7 +35,7 @@ public class objectDetectorClass {
     private static final int NUM_CLASSES = 4;
     private static final int NUM_PREDICTIONS = 2100;
     private static final int PLANE_SIZE = INPUT_SIZE * INPUT_SIZE;
-    private static final float CONF_THRESHOLD = 0.1f;
+    private static final float CONF_THRESHOLD = 0.2f;
     private static final float IOU_THRESHOLD = 0.5f;
     private static final int PERF_LOG_EVERY = 30;
 
@@ -43,6 +43,8 @@ public class objectDetectorClass {
     private static final float FOCAL_LENGTH_PX_AT_1280 = 625.0f;
     private static final float CALIBRATION_IMAGE_WIDTH = 1280.0f;
     // Width assumptions in meters: car, motorbike, bus, truck.
+    private static final float FOCAL_CORRECTION = 0.62151f;
+    private static final float BBOX_OFFSET_AT_1280 = 11.10613f;
     private static final float[] VEHICLE_WIDTH_METERS = {1.6f, 0.7f, 2.5f, 2.0f};
     private volatile NearestVehicle nearestVehicle = null;
 
@@ -56,13 +58,9 @@ public class objectDetectorClass {
     }
 
     // OpenCV Mat is RGBA here.
-    private static final Scalar CAR_COLOR = new Scalar(0, 255, 0, 255);
-    private static final Scalar MOTORBIKE_COLOR = new Scalar(255, 165, 0, 255);
-    private static final Scalar BUS_COLOR = new Scalar(255, 0, 255, 255);
-    private static final Scalar TRUCK_COLOR = new Scalar(0, 165, 255, 255);
     private static final Scalar OUTSIDE_COLOR = new Scalar(150, 150, 150, 255);
     private static final Scalar UNKNOWN_COLOR = new Scalar(255, 255, 0, 255);
-    private static final Scalar LEAD_COLOR = new Scalar(255, 0, 0, 255);
+    private static final Scalar LEAD_COLOR = new Scalar(0, 255, 0, 255);
 
     private final Interpreter interpreter;
     private final List<String> labelList;
@@ -83,6 +81,21 @@ public class objectDetectorClass {
     private double perfConvertNs, perfPreprocessNs, perfInferenceNs;
     private double perfDecodeNs, perfNmsNs, perfDrawNs, perfTotalNs;
     private boolean closed = false;
+    private CameraProfile cameraProfile;
+
+    private boolean cameraRotated90;
+
+    public synchronized void setCameraProfile(
+            CameraProfile profile) {
+
+        this.cameraProfile = profile;
+    }
+
+    public synchronized void setCameraRotated90(
+            boolean rotated90) {
+
+        this.cameraRotated90 = rotated90;
+    }
 
     public objectDetectorClass(AssetManager assetManager, String modelPath,
                                String labelPath, int inputSize) throws IOException {
@@ -190,16 +203,61 @@ public class objectDetectorClass {
         Detection closestDetection = null;
         float closestDistance = Float.POSITIVE_INFINITY;
         int insideCount = 0;
-        // Convert focal length to original frame width; never use 320 directly.
-        float focalPx = FOCAL_LENGTH_PX_AT_1280 * originalWidth / CALIBRATION_IMAGE_WIDTH;
+        float focalPx;
+        float bboxOffset = 0.0f;
+
+        if (cameraProfile != null) {
+
+            focalPx = cameraProfile.getFocalPx(
+                    originalWidth,
+                    originalHeight,
+                    cameraRotated90
+            ) * FOCAL_CORRECTION;
+
+            bboxOffset = BBOX_OFFSET_AT_1280
+                    * originalWidth
+                    / CALIBRATION_IMAGE_WIDTH;
+
+        } else {
+
+            focalPx = FOCAL_LENGTH_PX_AT_1280
+                    * originalWidth
+                    / CALIBRATION_IMAGE_WIDTH;
+        }
+
         for (Detection d : detections) {
             boolean inside = classifyLane(d) == LaneStatus.INSIDE;
             if (!inside) continue;
             insideCount++;
+
             float bboxWidth = d.x2 - d.x1;
-            if (bboxWidth <= 0) continue;
-            float distance = focalPx * VEHICLE_WIDTH_METERS[d.classId] / bboxWidth;
-            if ((!Float.isNaN(distance) && !Float.isInfinite(distance)) && distance > 0 && distance < closestDistance) {
+
+            float correctedWidth = correctBboxWidth(
+                    bboxWidth,
+                    scale,
+                    bboxOffset
+            );
+
+            if (correctedWidth <= 0) continue;
+
+            float distance = focalPx
+                    * VEHICLE_WIDTH_METERS[d.classId]
+                    / correctedWidth;
+            Log.d("DISTANCE_DEBUG", String.format(
+                    Locale.US,
+                    "Class=%s | Frame=%dx%d | Focal=%.2f | RawWidth=%.2f | CorrectedWidth=%.2f | Offset=%.2f | Distance=%.2f",
+                    labelList.get(d.classId),
+                    originalWidth,
+                    originalHeight,
+                    focalPx,
+                    bboxWidth,
+                    correctedWidth,
+                    bboxOffset,
+                    distance
+            ));
+
+            if ((!Float.isNaN(distance) && !Float.isInfinite(distance))
+                    && distance > 0 && distance < closestDistance) {
                 closestDistance = distance;
                 closestDetection = d;
             }
@@ -209,30 +267,56 @@ public class objectDetectorClass {
                 closestDistance, closestDetection.confidence, insideCount);
 
         for (Detection d : detections) {
-            // The bottom-center of the bounding box approximates tire/road contact.
-            boolean inside = classifyLane(d) == LaneStatus.INSIDE;
-            LaneStatus status=classifyLane(d);
-            Scalar color=inside?colorForClass(d.classId):(status==LaneStatus.OUTSIDE?OUTSIDE_COLOR:UNKNOWN_COLOR);
-            Imgproc.rectangle(workingImage, new Point(d.x1, d.y1),
-                    new Point(d.x2, d.y2), color, 2);
-            float distance = Float.NaN;
-            if (inside && d.x2 > d.x1) {
-                distance = focalPx * VEHICLE_WIDTH_METERS[d.classId] / (d.x2 - d.x1);
-            }
-            String label = labelList.get(d.classId) + " "
-                    + String.format(Locale.US, "%.2f", d.confidence);
-            if (inside && (!Float.isNaN(distance) && !Float.isInfinite(distance))) {
-                label += String.format(Locale.US, " %.1fm", distance);
-            }
-            if (status==LaneStatus.UNKNOWN) label += " | LANE UNKNOWN";
+
+            float bboxWidth = d.x2 - d.x1;
+
+            float correctedWidth = correctBboxWidth(
+                    bboxWidth,
+                    originalWidth,
+                    bboxOffset
+            );
+
+            if (correctedWidth <= 0) continue;
+
+            // Keep the original center
+            float centerX = (d.x1 + d.x2) * 0.5f;
+
+            // Shrink both sides equally
+            float newX1 = centerX - correctedWidth * 0.5f;
+            float newX2 = centerX + correctedWidth * 0.5f;
+
+            Detection correctedDetection = new Detection(
+                    newX1,
+                    d.y1,
+                    newX2,
+                    d.y2,
+                    d.confidence,
+                    d.classId
+            );
+
             if (d == closestDetection) {
-                Imgproc.rectangle(workingImage, new Point(d.x1 - 3, d.y1 - 3),
-                        new Point(d.x2 + 3, d.y2 + 3), LEAD_COLOR, 3);
-                label = "NEAREST " + label;
+
+                drawCornerBox(
+                        workingImage,
+                        correctedDetection,
+                        LEAD_COLOR
+                );
+
+            } else {
+
+                LaneStatus status = classifyLane(d);
+
+                Scalar color = status == LaneStatus.UNKNOWN
+                        ? UNKNOWN_COLOR : OUTSIDE_COLOR;
+
+                Imgproc.rectangle(
+                        workingImage,
+                        new Point(newX1, d.y1),
+                        new Point(newX2, d.y2),
+                        color,
+                        2
+                );
             }
-            Imgproc.putText(workingImage, label,
-                    new Point(d.x1, Math.max(20, (int) d.y1)),
-                    Imgproc.FONT_HERSHEY_SIMPLEX, 0.6, color, 2);
         }
         final long afterDraw = System.nanoTime();
 
@@ -246,6 +330,24 @@ public class objectDetectorClass {
                 afterDraw - afterNms,
                 end - start);
         return matImage;
+    }
+    private static float correctBboxWidth(
+            float bboxWidth,
+            float scale,
+            float bboxOffset) {
+
+        // Bounding box width in YOLO input (320x320)
+        float modelBboxWidth = bboxWidth * scale;
+
+        // Adaptive correction: 0% - 20%
+        float correction = clamp(
+                (15.0f - modelBboxWidth) / 7.5f,
+                0.0f,
+                1.0f
+        ) * 0.20f;
+
+        return bboxWidth * (1.0f - correction)
+                - bboxOffset;
     }
 
     public static final class NearestVehicle {
@@ -268,15 +370,28 @@ public class objectDetectorClass {
     public NearestVehicle getNearestVehicle() {
         return nearestVehicle;
     }
+    private static void drawCornerBox(Mat frame, Detection d, Scalar color) {
+        double x1 = d.x1;
+        double y1 = d.y1;
+        double x2 = d.x2;
+        double y2 = d.y2;
 
-    private static Scalar colorForClass(int classId) {
-        switch (classId) {
-            case 0: return CAR_COLOR;
-            case 1: return MOTORBIKE_COLOR;
-            case 2: return BUS_COLOR;
-            case 3: return TRUCK_COLOR;
-            default: return OUTSIDE_COLOR;
-        }
+        double length = 0.25 * Math.min(x2 - x1, y2 - y1);
+        if (length <= 0) return;
+
+        int thickness = 3;
+
+        Imgproc.line(frame, new Point(x1, y1), new Point(x1 + length, y1), color, thickness);
+        Imgproc.line(frame, new Point(x1, y1), new Point(x1, y1 + length), color, thickness);
+
+        Imgproc.line(frame, new Point(x2, y1), new Point(x2 - length, y1), color, thickness);
+        Imgproc.line(frame, new Point(x2, y1), new Point(x2, y1 + length), color, thickness);
+
+        Imgproc.line(frame, new Point(x1, y2), new Point(x1 + length, y2), color, thickness);
+        Imgproc.line(frame, new Point(x1, y2), new Point(x1, y2 - length), color, thickness);
+
+        Imgproc.line(frame, new Point(x2, y2), new Point(x2 - length, y2), color, thickness);
+        Imgproc.line(frame, new Point(x2, y2), new Point(x2, y2 - length), color, thickness);
     }
 
     private enum LaneStatus {INSIDE,OUTSIDE,UNKNOWN}

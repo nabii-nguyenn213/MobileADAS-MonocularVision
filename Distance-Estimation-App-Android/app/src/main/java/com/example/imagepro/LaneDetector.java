@@ -36,7 +36,7 @@ public final class LaneDetector implements AutoCloseable {
     private static final int BASE=640, SAMPLES=30, MIN_POINTS=5;
     private static final double ROI_TOP=.30, ROI_BOTTOM=.98, CENTER=.5;
     private static final double MIN_SPAN=.001, RESIDUAL=.008, MIN_WIDTH=.12, MAX_WIDTH=.90;
-    private static final double ALPHA=.25, MAX_JUMP=.045, HOLD_SECONDS=.5;
+    private static final double ALPHA=.25, MAX_JUMP=.10, HOLD_SECONDS=.5;
     private static final int LANE_INTERVAL=1;
     private static final Scalar LEFT_COLOR=new Scalar(0,255,0,255);
     private static final Scalar RIGHT_COLOR=new Scalar(255,0,0,255);
@@ -60,6 +60,7 @@ public final class LaneDetector implements AutoCloseable {
     private int lastFrameW=-1,lastFrameH=-1;
     private int logFrames=0;
     private double prepSum=0,inferSum=0,postSum=0;
+    private static final float MASK_THRESHOLD = -0.4f;
 
     private static final class Line {
         double a,b,low,high;
@@ -168,7 +169,9 @@ public final class LaneDetector implements AutoCloseable {
             int roiStart=(int)(fh*ROI_TOP),roiEnd=(int)(fh*ROI_BOTTOM);
             for(int y=0;y<fh;y++){
                 fullMargin.get(y,0,row);
-                for(int x=0;x<fw;x++)if(row[x]>0 && !Float.isNaN(row[x])&&!Float.isInfinite(row[x])){
+                for(int x=0;x<fw;x++)if(row[x] > MASK_THRESHOLD
+                        && !Float.isNaN(row[x])
+                        && !Float.isInfinite(row[x])) {
                     mask[y*fw+x]=1;maskPixels++;if(y>=roiStart&&y<roiEnd)roiPixels++;
                 }
             }
@@ -265,7 +268,7 @@ public final class LaneDetector implements AutoCloseable {
         double confidence=t.confidence*Math.max(.2,1-(t.valid?.2:.8)*age/Math.max(HOLD_SECONDS,1e-9));
         // Classification requires a fresh, confidence-gated observation.
         // On skipped frames, freshness is bounded by the lane sampling interval.
-        if(t.valid&&age<=HOLD_SECONDS&&confidence>=.65&&t.lastObserved!=null){
+        if(age<=HOLD_SECONDS&&confidence>=.5&&t.lastObserved!=null){
             Line obs=t.lastObserved;
             append(reliable, l, projectedLow(obs.low),
                     projectedHigh(obs.low, obs.high), w, h);
